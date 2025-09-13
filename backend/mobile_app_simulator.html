@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tourist App Simulator</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; background-color: #f0f2f5; }
+        .container { max-width: 500px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #333; text-align: center; }
+        .control-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        select, button { width: 100%; padding: 12px; font-size: 16px; border-radius: 5px; border: 1px solid #ccc; box-sizing: border-box; }
+        select[multiple] { height: 200px; }
+        button { cursor: pointer; color: white; border-width: 0; }
+        #start-btn { background-color: #007bff; }
+        #start-btn:hover { background-color: #0056b3; }
+        #sos-btn { background-color: #dc3545; margin-top: 10px; }
+        #sos-btn:hover { background-color: #c82333; }
+        #status { margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 5px; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Mobile App Simulator</h1>
+
+        <div class="control-group">
+            <label for="tourist-select">Select Tourists to Simulate (Ctrl/Cmd + Click for multiple):</label>
+            <select id="tourist-select" multiple></select>
+        </div>
+
+        <button id="start-btn" onclick="startMonitoring()">Start Monitoring Selected Tourists</button>
+        <button id="sos-btn" onclick="sendSOS()">SEND SOS for a Tourist</button>
+
+        <div id="status">
+            <h2>Simulation Status</h2>
+            <p><span id="current-status">Idle</span></p>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = "http://127.0.0.1:5000";
+        let activeSimulations = {}; // Store data for multiple active simulations
+
+        async function populateTouristIds() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/get_tourist_ids`);
+                const data = await response.json();
+                const select = document.getElementById('tourist-select');
+                select.innerHTML = '';
+
+                const normalGroup = document.createElement('optgroup');
+                normalGroup.label = 'Normal Paths';
+                data.normal.forEach(id => {
+                    const option = document.createElement('option');
+                    option.value = `${id}|normal`;
+                    option.innerText = id;
+                    normalGroup.appendChild(option);
+                });
+                select.appendChild(normalGroup);
+
+                const anomalyGroup = document.createElement('optgroup');
+                anomalyGroup.label = 'Anomalous Paths';
+                data.anomaly.forEach(id => {
+                    const option = document.createElement('option');
+                    option.value = `${id}|anomaly`;
+                    option.innerText = id;
+                    anomalyGroup.appendChild(option);
+                });
+                select.appendChild(anomalyGroup);
+
+            } catch (error) {
+                console.error("Failed to fetch tourist IDs:", error);
+                alert("Could not connect to the API server.");
+            }
+        }
+
+        async function startMonitoring() {
+            const selectedOptions = Array.from(document.getElementById('tourist-select').selectedOptions);
+            if (selectedOptions.length === 0) {
+                alert("Please select at least one tourist.");
+                return;
+            }
+
+            document.getElementById('current-status').innerText = `Starting ${selectedOptions.length} simulations...`;
+
+            // Clear all previous simulations
+            for (const simId in activeSimulations) {
+                clearInterval(activeSimulations[simId].interval);
+            }
+            activeSimulations = {};
+            await fetch(`${API_BASE_URL}/reset_simulation`);
+
+
+            for (const option of selectedOptions) {
+                const [touristId, pathType] = option.value.split('|');
+
+                const response = await fetch(`${API_BASE_URL}/get_path?id=${touristId}&type=${pathType}`);
+                const data = await response.json();
+
+                activeSimulations[touristId] = {
+                    path: data.path,
+                    pathType: data.path_type,
+                    currentIndex: 0,
+                    interval: null
+                };
+
+                startIndividualSimulation(touristId);
+            }
+            document.getElementById('current-status').innerText = `${selectedOptions.length} tourists are now being monitored.`;
+        }
+
+        function startIndividualSimulation(touristId) {
+            const sim = activeSimulations[touristId];
+            sim.interval = setInterval(async () => {
+                if (sim.currentIndex >= sim.path.length) {
+                    clearInterval(sim.interval);
+                    return;
+                }
+
+                const currentPoint = sim.path[sim.currentIndex];
+
+                // 1. Send lightweight location update
+                await fetch(`${API_BASE_URL}/update_location`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tourist_id: touristId, lat: currentPoint.lat, lon: currentPoint.lon, path_type: sim.pathType })
+                });
+
+                // 2. Send chunk for AI analysis
+                const pathChunk = sim.path.slice(0, sim.currentIndex + 1);
+                await fetch(`${API_BASE_URL}/predict`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: pathChunk, path_type: sim.pathType, tourist_id: touristId })
+                });
+
+                sim.currentIndex++;
+            }, 1500);
+        }
+
+        async function sendSOS() {
+            const activeIds = Object.keys(activeSimulations);
+            if (activeIds.length === 0) {
+                alert("Please start monitoring at least one tourist first!");
+                return;
+            }
+
+            const touristToSendSOS = prompt("Which tourist is sending the SOS?", activeIds.join(", "));
+            if (touristToSendSOS && activeSimulations[touristToSendSOS]) {
+                const sim = activeSimulations[touristToSendSOS];
+                const currentPos = sim.path[sim.currentIndex > 0 ? sim.currentIndex - 1 : 0];
+
+                await fetch(`${API_BASE_URL}/sos`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tourist_id: touristToSendSOS, lat: currentPos.lat, lon: currentPos.lon })
+                });
+
+                alert(`SOS Signal Sent for ${touristToSendSOS}!`);
+            } else {
+                alert("Invalid Tourist ID entered.");
+            }
+        }
+
+        window.onload = populateTouristIds;
+    </script>
+</body>
+</html>
+

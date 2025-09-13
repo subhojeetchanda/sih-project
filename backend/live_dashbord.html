@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Live Monitoring Dashboard</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
+        .header { background-color: #343a40; color: white; padding: 15px 20px; text-align: center; z-index: 1000; }
+        .main-content { display: flex; flex: 1; height: calc(100% - 60px); }
+        #map { width: 75%; height: 100%; }
+        .sidebar { width: 25%; height: 100%; background-color: #f8f9fa; border-left: 1px solid #dee2e6; box-sizing: border-box; overflow-y: auto; }
+        .sidebar-header { padding: 20px; font-size: 1.2em; font-weight: bold; border-bottom: 1px solid #dee2e6; }
+        .tourist-card { padding: 15px; border-bottom: 1px solid #e9ecef; }
+        .tourist-card.anomaly, .tourist-card.sos { background-color: #f8d7da; border-left: 5px solid #dc3545; }
+        .tourist-card p { margin: 2px 0; font-size: 0.9em; }
+        .tourist-card .status { font-weight: bold; }
+        .status-normal { color: #28a745; }
+        .status-anomaly, .status-sos { color: #dc3545; }
+        .leaflet-marker-icon.pulsing { animation: pulse 1s infinite; border-radius: 50%; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); } 70% { box-shadow: 0 0 0 20px rgba(220, 53, 69, 0); } 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); } }
+    </style>
+</head>
+<body>
+
+    <div class="header"><h1>Smart Tourist Safety - Live Dashboard</h1></div>
+    <div class="main-content">
+        <div id="map"></div>
+        <div class="sidebar">
+            <div class="sidebar-header">Active Tourists</div>
+            <div id="tourist-list"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = "http://127.0.0.1:5000";
+        let map = L.map('map').setView([27.53, 88.51], 9);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+        let touristMarkers = {}; // Object to store markers and related layers
+
+        async function updateDashboard() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/get_live_statuses`);
+                const liveData = await response.json();
+                const touristListDiv = document.getElementById('tourist-list');
+                touristListDiv.innerHTML = ''; // Clear and redraw the list each time
+
+                for (const touristId in liveData) {
+                    const data = liveData[touristId];
+                    const position = [data.lat, data.lon];
+
+                    // --- Update or Create Marker on Map ---
+                    if (!touristMarkers[touristId]) {
+                        touristMarkers[touristId] = {
+                            marker: L.marker(position).addTo(map).bindTooltip(touristId, { permanent: true, direction: 'right', offset: [10, 0] }),
+                            pathLine: L.polyline([], { color: '#007bff' }).addTo(map),
+                            anomalyCircle: null
+                        };
+                    }
+                    touristMarkers[touristId].marker.setLatLng(position);
+                    touristMarkers[touristId].pathLine.addLatLng(position);
+
+                    // --- Update Sidebar ---
+                    const card = document.createElement('div');
+                    card.className = 'tourist-card';
+                    card.id = `card-${touristId}`;
+                    card.innerHTML = `
+                        <p><strong>ID:</strong> ${touristId}</p>
+                        <p><strong>Location:</strong> ${data.lat.toFixed(4)}, ${data.lon.toFixed(4)}</p>
+                        <p><strong>Status:</strong> <span class="status status-${data.status}">${data.status.toUpperCase()}</span></p>
+                    `;
+                    touristListDiv.appendChild(card);
+
+                    // --- Update Map Styles and Alerts based on status ---
+                    updateMapElements(touristId, position, data.status);
+                }
+
+            } catch (error) {
+                console.error("Failed to fetch live statuses:", error);
+            }
+        }
+
+        function updateMapElements(touristId, position, status) {
+            const elements = touristMarkers[touristId];
+            if (!elements) return;
+
+            const isAlert = status === 'anomaly' || status === 'sos';
+
+            // Highlight card in sidebar
+            document.getElementById(`card-${touristId}`).classList.toggle(status, isAlert);
+
+            // Update marker icon and pulsing effect
+            elements.marker._icon.classList.toggle('pulsing', isAlert);
+
+            // Handle the anomaly/SOS circle
+            if (isAlert) {
+                if (!elements.anomalyCircle) {
+                    elements.anomalyCircle = L.circle(position, { color: 'red', fillColor: '#f03', fillOpacity: 0.3, radius: 500 }).addTo(map);
+                    if (status === 'sos') {
+                        alert(`SOS ALERT! Emergency signal received from tourist: ${touristId}`);
+                    }
+                }
+                elements.anomalyCircle.setLatLng(position);
+            } else {
+                if (elements.anomalyCircle) {
+                    map.removeLayer(elements.anomalyCircle);
+                    elements.anomalyCircle = null;
+                }
+            }
+        }
+
+        setInterval(updateDashboard, 2000);
+    </script>
+</body>
+</html>
+
