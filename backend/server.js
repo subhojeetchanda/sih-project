@@ -6,6 +6,7 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 const fs = require("fs");
 const csv = require("csv-parser");
+const path = require("path");
 
 const app = express();
 const PORT = 5001;
@@ -31,6 +32,29 @@ let touristLogs = {};
 let safetyAlerts = [];
 let anomalyDetectedTourists = new Set();
 
+// --- User Authentication Data (Local Storage) ---
+const usersFile = path.join(__dirname, 'users.json');
+
+// Load users from file
+let users = [];
+try {
+  if (fs.existsSync(usersFile)) {
+    const data = fs.readFileSync(usersFile, 'utf8');
+    users = JSON.parse(data);
+  }
+} catch (error) {
+  console.error('Error loading users:', error);
+}
+
+// Save users to file
+function saveUsers() {
+  try {
+    fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
+  } catch (error) {
+    console.error('Error saving users:', error);
+  }
+}
+
 // --- Helper: add log entry ---
 function addLogEntry(touristId, lat, lon, status) {
   if (!touristLogs[touristId]) touristLogs[touristId] = [];
@@ -49,7 +73,79 @@ function addLogEntry(touristId, lat, lon, status) {
   }
 }
 
-// --- Routes ---
+// --- Authentication Routes ---
+
+// User registration
+app.post("/register", (req, res) => {
+  const { username, phone, email } = req.body;
+
+  // Validate input
+  if (!username || !phone || !email) {
+    return res.status(400).json({ error: "All fields are required" });
+  }
+
+  // Check if user already exists
+  const existingUser = users.find(user => 
+    user.username === username || user.phone === phone || user.email === email
+  );
+
+  if (existingUser) {
+    return res.status(400).json({ error: "User already exists" });
+  }
+
+  // Create new user
+  const newUser = {
+    id: Date.now().toString(),
+    username,
+    phone,
+    email,
+    createdAt: new Date().toISOString()
+  };
+
+  users.push(newUser);
+  saveUsers();
+
+  res.json({ 
+    success: true, 
+    message: "User registered successfully",
+    user: { id: newUser.id, username: newUser.username }
+  });
+});
+
+// User login
+app.post("/login", (req, res) => {
+  const { username, phone } = req.body;
+
+  // Validate input
+  if (!username && !phone) {
+    return res.status(400).json({ error: "Provide either username or phone" });
+  }
+
+  // Find user
+  let user;
+  if (username) {
+    user = users.find(u => u.username === username);
+  } else {
+    user = users.find(u => u.phone === phone);
+  }
+
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  res.json({ 
+    success: true, 
+    message: "Login successful",
+    user: { id: user.id, username: user.username }
+  });
+});
+
+// Get all users (for testing)
+app.get("/users", (req, res) => {
+  res.json(users);
+});
+
+// --- Tourist Simulation Routes ---
 
 // Home
 app.get("/", (req, res) => {
@@ -153,8 +249,7 @@ app.post("/predict", (req, res) => {
 
       if (!anomalyDetectedTourists.has(tourist_id)) {
         safetyAlerts.push({
-          message:
-            "You are on a wrong anomalous path. Return to the correct path immediately.",
+          message: "You are on a wrong anomalous path. Return to the correct path immediately.",
           timestamp: new Date().toISOString(),
           type: "anomaly",
           tourist_id,
