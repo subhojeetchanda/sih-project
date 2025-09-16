@@ -7,6 +7,7 @@ const bodyParser = require("body-parser");
 const fs = require("fs");
 const csv = require("csv-parser");
 const path = require("path");
+const bcrypt = require("bcryptjs");
 
 const app = express();
 const PORT = 5001;
@@ -31,11 +32,13 @@ let liveTouristData = {};
 let touristLogs = {};
 let safetyAlerts = [];
 let anomalyDetectedTourists = new Set();
+let touristToUserMap = {}; // New mapping to track which user is monitoring which tourist
 
 // --- User Authentication Data (Local Storage) ---
 const usersFile = path.join(__dirname, 'users.json');
+const authUsersFile = path.join(__dirname, 'authUsers.json'); // New file for authentication users
 
-// Load users from file
+// Load users from file (for live-dashboard)
 let users = [];
 try {
   if (fs.existsSync(usersFile)) {
@@ -46,12 +49,32 @@ try {
   console.error('Error loading users:', error);
 }
 
-// Save users to file
+// Load authentication users from file (for registration/login)
+let authUsers = [];
+try {
+  if (fs.existsSync(authUsersFile)) {
+    const data = fs.readFileSync(authUsersFile, 'utf8');
+    authUsers = JSON.parse(data);
+  }
+} catch (error) {
+  console.error('Error loading auth users:', error);
+}
+
+// Save users to file (for live-dashboard)
 function saveUsers() {
   try {
     fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
   } catch (error) {
     console.error('Error saving users:', error);
+  }
+}
+
+// Save authentication users to file (for registration/login)
+function saveAuthUsers() {
+  try {
+    fs.writeFileSync(authUsersFile, JSON.stringify(authUsers, null, 2));
+  } catch (error) {
+    console.error('Error saving auth users:', error);
   }
 }
 
@@ -73,9 +96,9 @@ function addLogEntry(touristId, lat, lon, status) {
   }
 }
 
-// --- Authentication Routes ---
+// --- Authentication Routes (for live-dashboard) ---
 
-// User registration
+// User registration (for live-dashboard)
 app.post("/register", (req, res) => {
   const { username, phone, email } = req.body;
 
@@ -112,7 +135,7 @@ app.post("/register", (req, res) => {
   });
 });
 
-// User login
+// User login (for live-dashboard)
 app.post("/login", (req, res) => {
   const { username, phone } = req.body;
 
@@ -140,9 +163,116 @@ app.post("/login", (req, res) => {
   });
 });
 
+// --- Enhanced Authentication Routes (for registration/login page) ---
+
+// Enhanced user registration
+app.post("/auth/register", async (req, res) => {
+  const { username, email, password, dateOfBirth, aadhaarNumber, phone, pathType } = req.body;
+
+  // Validate input
+  if (!username || !email || !password || !dateOfBirth || !aadhaarNumber || !phone || !pathType) {
+    return res.status(400).json({ error: "All fields are required" });
+  }
+
+  // Validate Aadhaar number (12 digits)
+  if (!/^\d{12}$/.test(aadhaarNumber)) {
+    return res.status(400).json({ error: "Aadhaar number must be 12 digits" });
+  }
+
+  // Validate phone number (10 digits)
+  if (!/^\d{10}$/.test(phone)) {
+    return res.status(400).json({ error: "Phone number must be 10 digits" });
+  }
+
+  // Check if user already exists
+  const existingUser = authUsers.find(user => 
+    user.username === username || user.email === email || user.phone === phone || user.aadhaarNumber === aadhaarNumber
+  );
+
+  if (existingUser) {
+    let field = "";
+    if (existingUser.username === username) field = "username";
+    else if (existingUser.email === email) field = "email";
+    else if (existingUser.phone === phone) field = "phone";
+    else if (existingUser.aadhaarNumber === aadhaarNumber) field = "Aadhaar number";
+    
+    return res.status(400).json({ error: `User with this ${field} already exists` });
+  }
+
+  try {
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user
+    const newUser = {
+      id: Date.now().toString(),
+      username,
+      email,
+      password: hashedPassword,
+      dateOfBirth,
+      aadhaarNumber,
+      phone,
+      pathType, // Store the selected path type
+      createdAt: new Date().toISOString()
+    };
+
+    authUsers.push(newUser);
+    saveAuthUsers();
+
+    res.json({ 
+      success: true, 
+      message: "User registered successfully",
+      user: { id: newUser.id, username: newUser.username, pathType: newUser.pathType }
+    });
+  } catch (error) {
+    console.error('Error during registration:', error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Enhanced user login
+app.post("/auth/login", async (req, res) => {
+  const { username, password } = req.body;
+
+  // Validate input
+  if (!username || !password) {
+    return res.status(400).json({ error: "Username and password are required" });
+  }
+
+  // Find user
+  const user = authUsers.find(u => u.username === username);
+  
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  try {
+    // Check password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: "Invalid password" });
+    }
+
+    res.json({ 
+      success: true, 
+      message: "Login successful",
+      user: { id: user.id, username: user.username, pathType: user.pathType }
+    });
+  } catch (error) {
+    console.error('Error during login:', error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Get all users (for testing)
 app.get("/users", (req, res) => {
   res.json(users);
+});
+
+// Get all auth users (for testing)
+app.get("/auth/users", (req, res) => {
+  res.json(authUsers);
 });
 
 // --- Tourist Simulation Routes ---
@@ -158,6 +288,7 @@ app.get("/reset_simulation", (req, res) => {
   touristLogs = {};
   safetyAlerts = [];
   anomalyDetectedTourists = new Set();
+  touristToUserMap = {}; // Reset the mapping on simulation reset
   res.json({ status: "Simulation reset" });
 });
 
@@ -185,16 +316,15 @@ app.get("/get_tourist_ids", (req, res) => {
 });
 
 // Get path for a tourist
-app.get("/get_path", (req, res) => {
-  const touristId = req.query.id;
-  const reqType = req.query.type;
+app.post("/get_path", (req, res) => {
+  const { tourist_id, type, username } = req.body;
 
-  const pathData = df_simulation.filter((r) => r.tourist_id === touristId);
+  const pathData = df_simulation.filter((r) => r.tourist_id === tourist_id);
   if (!pathData.length)
     return res.status(404).json({ error: "Tourist ID not found" });
 
   const actualType = pathData[0].path_type;
-  if (reqType && reqType !== actualType)
+  if (type && type !== actualType)
     return res.status(400).json({ error: "Path type mismatch" });
 
   const coords = pathData.map((r) => ({
@@ -202,16 +332,22 @@ app.get("/get_path", (req, res) => {
     lon: parseFloat(r.lon),
   }));
 
-  liveTouristData[touristId] = {
+  liveTouristData[tourist_id] = {
     lat: coords[0].lat,
     lon: coords[0].lon,
     status: "normal",
     path_type: actualType,
+    username: username || "Unknown", // Store the username with the tourist data
     timestamp: new Date().toISOString(),
   };
 
-  addLogEntry(touristId, coords[0].lat, coords[0].lon, "normal");
-  res.json({ tourist_id: touristId, path_type: actualType, path: coords });
+  // Map the tourist to the user
+  if (username) {
+    touristToUserMap[tourist_id] = username;
+  }
+
+  addLogEntry(tourist_id, coords[0].lat, coords[0].lon, "normal");
+  res.json({ tourist_id: tourist_id, path_type: actualType, path: coords });
 });
 
 // Update location
@@ -253,6 +389,7 @@ app.post("/predict", (req, res) => {
           timestamp: new Date().toISOString(),
           type: "anomaly",
           tourist_id,
+          username: touristToUserMap[tourist_id] || "Unknown" // Include username in alert
         });
         anomalyDetectedTourists.add(tourist_id);
       }
@@ -281,6 +418,7 @@ app.post("/sos", (req, res) => {
     lat,
     lon,
     status: "sos",
+    username: touristToUserMap[tourist_id] || "Unknown", // Include username in SOS data
     timestamp: new Date().toISOString(),
   };
   addLogEntry(tourist_id, lat, lon, "sos");
@@ -290,6 +428,7 @@ app.post("/sos", (req, res) => {
     timestamp: new Date().toISOString(),
     type: "sos",
     tourist_id,
+    username: touristToUserMap[tourist_id] || "Unknown" // Include username in alert
   });
   res.json({ status: "SOS Signal Received" });
 });
@@ -313,11 +452,24 @@ app.post("/resolve_sos", (req, res) => {
 });
 
 // Get statuses, logs, alerts
-app.get("/get_live_statuses", (req, res) => res.json(liveTouristData));
+app.get("/get_live_statuses", (req, res) => {
+  // Add username to each tourist's data
+  const statusesWithUsernames = {};
+  for (const [touristId, data] of Object.entries(liveTouristData)) {
+    statusesWithUsernames[touristId] = {
+      ...data,
+      username: touristToUserMap[touristId] || "Unknown"
+    };
+  }
+  res.json(statusesWithUsernames);
+});
+
 app.get("/get_logs/:id", (req, res) =>
   res.json(touristLogs[req.params.id] || [])
 );
+
 app.get("/get_safety_alerts", (req, res) => res.json(safetyAlerts));
+
 app.post("/clear_safety_alerts", (req, res) => {
   safetyAlerts = [];
   res.json({ status: "Alerts cleared" });

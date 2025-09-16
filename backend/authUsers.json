@@ -1,0 +1,23 @@
+[
+  {
+    "id": "1757958528366",
+    "username": "Subhojeet",
+    "email": "subhojeetchanda18@gmail.com",
+    "password": "$2b$10$bjtgEmuJyJQoTNusA3g/Ku/T3svH5BKnS10eXzueyT1XiPVXIpdxa",
+    "dateOfBirth": "2003-02-10",
+    "aadhaarNumber": "123456789000",
+    "phone": "9835194489",
+    "createdAt": "2025-09-15T17:48:48.366Z"
+  },
+  {
+    "id": "1757963770614",
+    "username": "Subhojeet123",
+    "email": "subhojeetchanda1@gmail.com",
+    "password": "$2b$10$kFH69In/nsbOTngzwj6qR.hH19kBrU1vWblxhWjuFHv3pT9QxcVwi",
+    "dateOfBirth": "2003-02-10",
+    "aadhaarNumber": "123456789001",
+    "phone": "9835194481",
+    "pathType": "normal",
+    "createdAt": "2025-09-15T19:16:10.614Z"
+  }
+]
